@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.2 — 2026-10-30
+
+- Published to npm: `dsh plugin --profile <profile> add dsh-pku-cluster` now works.
+- README: link the npm package page.
+
 ## 0.1.1 — 2026-10-30
 
 - `Diagnose` now explains itself when the installed helper predates `--diagnose`
