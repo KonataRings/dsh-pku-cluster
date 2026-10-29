@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.1 — 2026-10-30
+
+- `Diagnose` now explains itself when the installed helper predates `--diagnose`
+  (for example with `autoInstall: false`) instead of surfacing a misleading login error.
+- README: document installing from a tarball, and warn that `git+https` needs Git on the machine
+  (pnpm shells out to `git ls-remote`; without Git it fails with `ERR_PNPM_GIT_RESOLVE_FAILED`).
+
 ## 0.1.0 — 2026-10-30
 
 First public release.
