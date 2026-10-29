@@ -72,10 +72,19 @@
 
 ## 安装
 
-### 从 GitHub（现在就能用）
+### 从 GitHub（需要机器上装 Git）
 
 ```bash
 dsh plugin --profile <profile> add git+https://github.com/KonataRings/dsh-pku-cluster.git
+```
+
+> pnpm 拉 git 依赖要调用 `git ls-remote`。**没装 Git 会直接失败**（`ERR_PNPM_GIT_RESOLVE_FAILED`），
+> 这种情况用下面的压缩包方式。
+
+### 从压缩包（不需要 Git）
+
+```bash
+dsh plugin --profile <profile> add https://github.com/KonataRings/dsh-pku-cluster/archive/refs/tags/v0.1.1.tar.gz
 ```
 
 ### 从 npm（尚未发布）
