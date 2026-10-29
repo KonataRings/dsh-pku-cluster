@@ -77,16 +77,16 @@ want an agent that can submit jobs for you.
 
 ## Install
 
-### From npm (once published)
+### From GitHub (available now)
+
+```bash
+dsh plugin --profile <profile> add git+https://github.com/KonataRings/dsh-pku-cluster.git
+```
+
+### From npm (not published yet)
 
 ```bash
 dsh plugin --profile <profile> add dsh-pku-cluster
-```
-
-### From a git repository
-
-```bash
-dsh plugin --profile <profile> add git+https://github.com/<you>/dsh-pku-cluster.git
 ```
 
 ### From a local checkout
