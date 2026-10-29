@@ -77,10 +77,19 @@ want an agent that can submit jobs for you.
 
 ## Install
 
-### From GitHub (available now)
+### From GitHub (requires Git on the machine)
 
 ```bash
 dsh plugin --profile <profile> add git+https://github.com/KonataRings/dsh-pku-cluster.git
+```
+
+> pnpm shells out to `git ls-remote` for git dependencies. **Without Git installed this fails**
+> (`ERR_PNPM_GIT_RESOLVE_FAILED`) — use the tarball form below instead.
+
+### From a tarball (no Git needed)
+
+```bash
+dsh plugin --profile <profile> add https://github.com/KonataRings/dsh-pku-cluster/archive/refs/tags/v0.1.1.tar.gz
 ```
 
 ### From npm (not published yet)
