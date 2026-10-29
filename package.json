@@ -1,6 +1,6 @@
 {
   "name": "dsh-pku-cluster",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "PKU Weiming Teaching-2 cluster for DeepSeek Harness: sidebar login with password + OTP, multiplexed SSH, and a loopback relay so WSL can reach the cluster through the Windows VPN.",
   "type": "module",
   "main": "lib/index.js",
