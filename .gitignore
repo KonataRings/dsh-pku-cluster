@@ -1,0 +1,10 @@
+node_modules/
+.pnpm-store/
+*.log
+*.tgz
+.DS_Store
+Thumbs.db
+__pycache__/
+*.pyc
+.venv/
+dist/

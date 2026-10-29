@@ -1,0 +1,9 @@
+# PKU Weiming Teaching-2 cluster: sidebar login + multiplexed SSH.
+#
+# The cluster does not support key authentication, so nothing is persisted:
+# the password and OTP are handed to a pty driver over stdin, and the
+# connection is owned by OpenSSH's ControlMaster afterwards.
+
+- insert:
+    - id: pku-cluster
+      name: dsh-pku-cluster

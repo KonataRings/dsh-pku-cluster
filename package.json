@@ -1,0 +1,64 @@
+{
+  "name": "dsh-pku-cluster",
+  "version": "0.1.0",
+  "description": "PKU Weiming Teaching-2 cluster for DeepSeek Harness: sidebar login with password + OTP, multiplexed SSH, and a loopback relay so WSL can reach the cluster through the Windows VPN.",
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./client": "./lib/client.js",
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib",
+    "resources",
+    "docs",
+    "cordis.patch.yml",
+    "README.md",
+    "README.en.md",
+    "CHANGELOG.md",
+    "LICENSE"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/KonataRings/dsh-pku-cluster.git"
+  },
+  "bugs": {
+    "url": "https://github.com/KonataRings/dsh-pku-cluster/issues"
+  },
+  "homepage": "https://github.com/KonataRings/dsh-pku-cluster#readme",
+  "engines": {
+    "node": ">=20"
+  },
+  "keywords": [
+    "dsh-plugin",
+    "deepseek-harness",
+    "pku",
+    "hpc",
+    "cluster",
+    "ssh",
+    "wsl",
+    "otp"
+  ],
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "^4.0.2"
+  },
+  "peerDependenciesMeta": {
+    "@deepseek-ai/cordis": {
+      "optional": true
+    }
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-sidebar"
+      ]
+    }
+  }
+}

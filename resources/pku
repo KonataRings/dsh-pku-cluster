@@ -1,0 +1,89 @@
+#!/usr/bin/env bash
+# pku — PKU cluster helper installed by the dsh-pku-cluster plugin.
+#
+# Reads ~/.pku-cluster/config.json so the plugin (not this script) owns
+# the connection parameters. Works in both modes:
+#   relay  - Windows/WSL: ssh goes through the plugin's loopback relay
+#   direct - Linux/macOS: ssh goes straight to the login node
+#
+# Authentication is password + OTP (the cluster offers no key auth); the
+# multiplexed ControlMaster is established once by the plugin page.
+set -uo pipefail
+
+H="${PKU_HOST:-pku}"
+CONF="${PKU_CONFIG:-$HOME/.pku-cluster/config.json}"
+
+die() { echo "error: $*" >&2; exit 1; }
+
+if ! eval "$(python3 - "$CONF" <<'PY'
+import json, shlex, sys
+try:
+    with open(sys.argv[1]) as fh:
+        c = json.load(fh)
+except Exception:
+    c = {}
+print("MODE=%s LHOST=%s LPORT=%s RPORT=%s RUSER=%s" % (
+    shlex.quote(str(c.get("mode", "direct"))),
+    shlex.quote(str(c.get("loginHost", ""))),
+    shlex.quote(str(c.get("loginPort", 22))),
+    shlex.quote(str(c.get("relayPort", 2222))),
+    shlex.quote(str(c.get("user", ""))),
+))
+PY
+)"; then
+  die "cannot read $CONF (run the plugin page once to install it)"
+fi
+
+if [ "${MODE:-direct}" = "relay" ]; then
+  HOST=$(ip route | awk '/^default/{print $3; exit}')
+  PORT="${RPORT:-2222}"
+else
+  HOST="${LHOST:-}"
+  PORT="${LPORT:-22}"
+fi
+[ -n "$HOST" ] || die "no target host in $CONF"
+
+H_OPTS=( -o "HostName=$HOST" -o "Port=$PORT" )
+[ -n "${RUSER:-}" ] && H_OPTS+=( -o "User=$RUSER" )
+
+# ControlMaster socket must match the driver's ControlPath exactly.
+CM_DIR="$HOME/.pku-cluster/cm"
+mkdir -p "$CM_DIR" && chmod 700 "$CM_DIR"
+H_OPTS+=( -o "ControlMaster=auto" -o "ControlPath=$CM_DIR/%r@%h-%p" -o "ControlPersist=8h" \
+          -o ServerAliveInterval=30 -o ServerAliveCountMax=6 -o TCPKeepAlive=yes )
+
+check() { ssh "${H_OPTS[@]}" -O check "$H" 2>/dev/null; }
+require_master() {
+  check >/dev/null 2>&1 || die "no multiplexed connection; log in from the DSH sidebar ('Connect cluster') first"
+}
+
+case "${1:-}" in
+  status)  require_master
+           ssh "${H_OPTS[@]}" "$H" 'echo "host: $(hostname)"; echo "user: $(whoami)"; echo "home: $(pwd)"; echo "load: $(uptime | sed "s/.*load average: //")"' ;;
+  run)     require_master; shift; [ $# -ge 1 ] || die "usage: pku run '<command>'"; ssh "${H_OPTS[@]}" "$H" "$*" ;;
+  push)    require_master; shift; [ $# -eq 2 ] || die "usage: pku push <local> <remote>"; rsync -avz -e "ssh ${H_OPTS[*]}" "$1" "$H:$2" ;;
+  pull)    require_master; shift; [ $# -eq 2 ] || die "usage: pku pull <remote> <local>"; rsync -avz -e "ssh ${H_OPTS[*]}" "$H:$1" "$2" ;;
+  sbatch)  require_master; shift; [ $# -ge 1 ] || die "usage: pku sbatch <script> [remote_dir]"
+           f="$1"; rd="${2:-~/jobs}"
+           ssh "${H_OPTS[@]}" "$H" "mkdir -p $rd" \
+             && rsync -az -e "ssh ${H_OPTS[*]}" "$f" "$H:$rd/" \
+             && ssh "${H_OPTS[@]}" "$H" "cd $rd && sbatch $(basename "$f")" ;;
+  jobs)    require_master; ssh "${H_OPTS[@]}" "$H" 'squeue -u "$USER" 2>/dev/null || cqueue' ;;
+  log)     require_master; shift; [ $# -ge 1 ] || die "usage: pku log <file> [lines]"; ssh "${H_OPTS[@]}" "$H" "tail -n ${2:-60} $1" ;;
+  shell)   require_master; exec ssh "${H_OPTS[@]}" "$H" ;;
+  down)    ssh "${H_OPTS[@]}" -O exit "$H" 2>/dev/null && echo "disconnected" || echo "nothing to disconnect" ;;
+  *) cat <<'EOF'
+usage: pku <command>
+
+  status               connection state + login node info
+  run '<command>'      run a command on the login node (no heavy compute!)
+  push <local> <remote>  upload with rsync
+  pull <remote> <local>  download with rsync
+  sbatch <script> [dir]  upload and submit a batch job
+  jobs                 show the queue
+  log <file> [lines]   tail a job log
+  shell                interactive shell
+  down                 drop the multiplexed connection
+EOF
+  ;;
+esac
