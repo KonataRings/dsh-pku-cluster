@@ -72,16 +72,16 @@
 
 ## 安装
 
-### 从 npm（发布后）
+### 从 GitHub（现在就能用）
+
+```bash
+dsh plugin --profile <profile> add git+https://github.com/KonataRings/dsh-pku-cluster.git
+```
+
+### 从 npm（尚未发布）
 
 ```bash
 dsh plugin --profile <profile> add dsh-pku-cluster
-```
-
-### 从 Git 仓库
-
-```bash
-dsh plugin --profile <profile> add git+https://github.com/<you>/dsh-pku-cluster.git
 ```
 
 ### 从本地目录（开发）
