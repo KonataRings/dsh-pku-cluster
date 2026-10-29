@@ -92,11 +92,13 @@ dsh plugin --profile <profile> add git+https://github.com/KonataRings/dsh-pku-cl
 dsh plugin --profile <profile> add https://github.com/KonataRings/dsh-pku-cluster/archive/refs/tags/v0.1.1.tar.gz
 ```
 
-### From npm (not published yet)
+### From npm
 
 ```bash
 dsh plugin --profile <profile> add dsh-pku-cluster
 ```
+
+Package page: <https://www.npmjs.com/package/dsh-pku-cluster>
 
 ### From a local checkout
 
