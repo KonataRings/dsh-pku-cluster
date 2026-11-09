@@ -1,60 +1,122 @@
 #!/usr/bin/env bash
 # pku — PKU cluster helper installed by the dsh-pku-cluster plugin.
 #
-# Reads ~/.pku-cluster/config.json so the plugin (not this script) owns
+# A *session* is one endpoint of one cluster (e.g. wm1:login, wm1:data). Each
+# session has its own ControlPath, so several clusters can be logged in at the
+# same time. Pick one with -c or PKU_SESSION; otherwise the session last
+# selected in the plugin page is used.
+#
+#   pku status                 # the selected session
+#   pku -c wm1 status          # 未名一号 login node
+#   pku -c wm1:data push a b   # through its data-transfer node
+#
+# Reads ~/.pku-cluster/sessions/<key>.json so the plugin (not this script) owns
 # the connection parameters. Works in both modes:
 #   relay  - Windows/WSL: ssh goes through the plugin's loopback relay
-#   direct - Linux/macOS: ssh goes straight to the login node
+#   direct - Linux/macOS: ssh goes straight to the endpoint
 #
 # Authentication is password + OTP (the cluster offers no key auth); the
 # multiplexed ControlMaster is established once by the plugin page.
 set -uo pipefail
 
-H="${PKU_HOST:-pku}"
-CONF="${PKU_CONFIG:-$HOME/.pku-cluster/config.json}"
+CONF_DIR="${PKU_CLUSTER_DIR:-$HOME/.pku-cluster}"
+SESSIONS="$CONF_DIR/sessions"
 
 die() { echo "error: $*" >&2; exit 1; }
 
-if ! eval "$(python3 - "$CONF" <<'PY'
-import json, shlex, sys
-try:
-    with open(sys.argv[1]) as fh:
-        c = json.load(fh)
-except Exception:
-    c = {}
-print("MODE=%s LHOST=%s LPORT=%s RPORT=%s RUSER=%s" % (
-    shlex.quote(str(c.get("mode", "direct"))),
-    shlex.quote(str(c.get("loginHost", ""))),
-    shlex.quote(str(c.get("loginPort", 22))),
-    shlex.quote(str(c.get("relayPort", 2222))),
-    shlex.quote(str(c.get("user", ""))),
-))
+KEY="${PKU_SESSION:-}"
+REST=()
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -c|--cluster) KEY="${2:-}"; shift; [ $# -gt 0 ] && shift ;;
+    --cluster=*) KEY="${1#*=}"; shift ;;
+    *) REST+=("$1"); shift ;;
+  esac
+done
+set -- "${REST[@]+"${REST[@]}"}"
+
+if [ -z "$KEY" ] && [ -f "$CONF_DIR/selected-session.json" ]; then
+  KEY=$(python3 - "$CONF_DIR/selected-session.json" <<'PY' 2>/dev/null
+import json, sys
+print(json.load(open(sys.argv[1])).get("key", ""))
 PY
-)"; then
-  die "cannot read $CONF (run the plugin page once to install it)"
+)
+fi
+if [ -z "$KEY" ]; then
+  KEY=$(python3 - "$SESSIONS" <<'PY' 2>/dev/null
+import glob, json, os, sys
+for path in sorted(glob.glob(os.path.join(sys.argv[1], "*.json"))):
+    try:
+        key = json.load(open(path)).get("key", "")
+    except Exception:
+        continue
+    if key:
+        print(key)
+        break
+PY
+)
 fi
 
-if [ "${MODE:-direct}" = "relay" ]; then
-  HOST=$(ip route | awk '/^default/{print $3; exit}')
-  PORT="${RPORT:-2222}"
+CONF=""
+if [ -n "$KEY" ]; then
+  CONF=$(python3 - "$SESSIONS" "$KEY" <<'PY' 2>/dev/null
+import os, re, sys
+sessions, key = sys.argv[1], sys.argv[2]
+print(os.path.join(sessions, re.sub(r"[^0-9A-Za-z._-]+", "-", key.replace(":", "-")) + ".json"))
+PY
+)
+  [ -n "$CONF" ] && [ -f "$CONF" ] || die "unknown session '$KEY'"
+  eval "$(python3 - "$CONF" <<'PY'
+import json, shlex, sys
+c = json.load(open(sys.argv[1]))
+fields = {
+    "KEY": c.get("key", ""),
+    "HOST": c.get("host", c.get("loginHost", "")),
+    "PORT": c.get("port", c.get("loginPort", 22)),
+    "USER": c.get("user", ""),
+    "MODE": c.get("mode", "direct"),
+    "RELAYPORT": c.get("relayPort", 2222),
+    "CONTROLPATH": c.get("controlPath", ""),
+    "SESSIONHOST": c.get("host", ""),
+}
+for name, value in fields.items():
+    print("%s=%s" % (name, shlex.quote(str(value))))
+PY
+)"
 else
-  HOST="${LHOST:-}"
-  PORT="${LPORT:-22}"
+  KEY="?"; HOST=""; PORT=22; USER=""; MODE="direct"; RELAYPORT=2222; CONTROLPATH=""
 fi
-[ -n "$HOST" ] || die "no target host in $CONF"
 
+# Session selection is only required for commands that talk to the cluster.
+case "${1:-}" in
+  ""|help|-h|--help|sessions) : ;;
+  *) [ -n "${HOST:-}" ] || die "no session selected: use -c <cluster>[:<endpoint>] or log in from the DSH sidebar" ;;
+esac
+
+if [ "$MODE" = "relay" ]; then
+  HOST=$(ip route | awk '/^default/{print $3; exit}')
+  PORT="${RELAYPORT:-2222}"
+fi
+[ -n "${HOST:-}" ] || [ "${1:-}" = "sessions" ] || die "no target host for session '$KEY'"
+
+if [ -z "${CONTROLPATH:-}" ]; then
+  # Derive the same path login.py uses when the session file carries no
+  # absolute ControlPath (the case for bash targets).
+  KEYDIR=$(printf '%s' "$KEY" | sed 's/:/-/g; s/[^0-9A-Za-z._-]\+/-/g')
+  CONTROLPATH="$CONF_DIR/cm/$KEYDIR/%r@%h-%p"
+  mkdir -p "$CONF_DIR/cm/$KEYDIR" 2>/dev/null || true
+fi
+CP="$CONTROLPATH"
+
+H="${PKU_HOST:-${SESSIONHOST:-$HOST}}"
 H_OPTS=( -o "HostName=$HOST" -o "Port=$PORT" )
-[ -n "${RUSER:-}" ] && H_OPTS+=( -o "User=$RUSER" )
-
-# ControlMaster socket must match the driver's ControlPath exactly.
-CM_DIR="$HOME/.pku-cluster/cm"
-mkdir -p "$CM_DIR" && chmod 700 "$CM_DIR"
-H_OPTS+=( -o "ControlMaster=auto" -o "ControlPath=$CM_DIR/%r@%h-%p" -o "ControlPersist=8h" \
+[ -n "${USER:-}" ] && H_OPTS+=( -o "User=$USER" )
+H_OPTS+=( -o "ControlMaster=auto" -o "ControlPath=$CP" -o "ControlPersist=8h" \
           -o ServerAliveInterval=30 -o ServerAliveCountMax=6 -o TCPKeepAlive=yes )
 
 check() { ssh "${H_OPTS[@]}" -O check "$H" 2>/dev/null; }
 require_master() {
-  check >/dev/null 2>&1 || die "no multiplexed connection; log in from the DSH sidebar ('Connect cluster') first"
+  check >/dev/null 2>&1 || die "session '$KEY' is not connected; log in from the DSH sidebar ('Connect cluster') first"
 }
 
 case "${1:-}" in
@@ -71,9 +133,24 @@ case "${1:-}" in
   jobs)    require_master; ssh "${H_OPTS[@]}" "$H" 'squeue -u "$USER" 2>/dev/null || cqueue' ;;
   log)     require_master; shift; [ $# -ge 1 ] || die "usage: pku log <file> [lines]"; ssh "${H_OPTS[@]}" "$H" "tail -n ${2:-60} $1" ;;
   shell)   require_master; exec ssh "${H_OPTS[@]}" "$H" ;;
-  down)    ssh "${H_OPTS[@]}" -O exit "$H" 2>/dev/null && echo "disconnected" || echo "nothing to disconnect" ;;
+  down)    ssh "${H_OPTS[@]}" -O exit "$H" 2>/dev/null && echo "disconnected $KEY" || echo "nothing to disconnect" ;;
+  sessions) [ -d "$SESSIONS" ] || die "no sessions yet"
+           python3 - "$SESSIONS" <<'PY'
+import glob, json, os, sys
+for path in sorted(glob.glob(os.path.join(sys.argv[1], "*.json"))):
+    try:
+        c = json.load(open(path))
+    except Exception:
+        continue
+    print("%-12s %-30s user=%s mode=%s" % (
+        c.get("key", "?"), c.get("host", "?"), c.get("user", ""), c.get("mode", "")))
+PY
+           ;;
   *) cat <<'EOF'
-usage: pku <command>
+usage: pku [-c <cluster>[:<endpoint>]] <command>
+
+  -c, --cluster <key>  session to use, e.g. wm1 or wm1:data (default: the one
+                       selected in the plugin page)
 
   status               connection state + login node info
   run '<command>'      run a command on the login node (no heavy compute!)
@@ -83,7 +160,8 @@ usage: pku <command>
   jobs                 show the queue
   log <file> [lines]   tail a job log
   shell                interactive shell
-  down                 drop the multiplexed connection
+  down                 drop this session's multiplexed connection
+  sessions             list the registered sessions
 EOF
   ;;
 esac
