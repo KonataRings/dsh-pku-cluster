@@ -138,3 +138,48 @@ export MKL_NUM_THREADS=1
 - 只能 密码 + OTP；OTP 在 `https://hpc.pku.edu.cn/authotp/otp` 绑定，30 秒有效。
 - 因此无法做到完全免人工登录：VPN 重连或连接超时后需要重新登录一次。
 - **不要**把密码和 TOTP 密钥存盘自动生成验证码——等于把二步验证永久落地，泄露一次即失守。
+
+---
+
+## 10. 为什么 `login.py` 用 `pty.fork()` 而不是 `openpty()`
+
+**结论**：`openpty()` + `Popen(stdin=slave, stdout=slave, stderr=slave)` 得到的是一个 pty，但它**不是**
+子进程的控制终端（没有 `setsid` + `TIOCSCTTY`）。OpenSSH 打密码提示走 `readpassphrase()`，它会尝试
+打开 `/dev/tty`；没有控制终端时打开失败，于是 ssh 既不打印提示、也读不到输入，进程挂在那里直到超时。
+`pty.fork()` 会让子进程成为会话首进程、把 pty 设为它的控制终端，提示就正常出现。
+
+**为什么在交互式终端里复现不出来**：从 shell 里跑脚本时，进程本来就继承了一个控制终端，`/dev/tty`
+可用，`openpty()` 的缺陷被掩盖。插件是由 DSH 进程以无终端方式启动 `login.py` 的，才会暴露。
+
+**最小复现**（在 WSL 里执行；把 host/port 换成任何需要密码的 ssh 端点）：
+
+```python
+# bad.py — 挂住，看不到 Password: 提示
+import os, pty, subprocess, time
+m, s = pty.openpty()
+p = subprocess.Popen(["/bin/sh", "-c", "exec ssh -o PreferredAuthentications=password host"],
+                     stdin=s, stdout=s, stderr=s)
+os.close(s)
+time.sleep(5)
+print("alive:", p.poll() is None, "| prompt seen:", b"assword" in os.read(m, 4096))
+```
+
+```python
+# good.py — 提示出现，可以应答
+import os, pty, time
+pid, m = pty.fork()
+if pid == 0:
+    os.execv("/bin/sh", ["/bin/sh", "-c", "exec ssh -o PreferredAuthentications=password host"])
+time.sleep(5)
+print(os.read(m, 4096).decode("utf-8", "ignore")[-120:])
+```
+
+判定方法：`bad.py` 输出 `prompt seen: False` 且进程仍存活；`good.py` 能看到 `Password:`。
+
+---
+
+## 11. 中继端口不再是固定的 2222
+
+0.2 起每个会话各有一个中继，默认由系统分配端口（`relayPort: 0`）。如果旧版本里为 `2222` 配过防火墙或
+脚本，把 `relayPort` 设成 `2222` 即可让第一个会话优先占用它；并发会话仍会各自退到随机端口，因为一个端口
+只能有一个监听。
