@@ -16,6 +16,22 @@ jobs:
         run: |
           node --check lib/index.js
           node --check lib/client.js
+          node --check lib/targets.js
+          node --check lib/paths.js
+          node --check lib/clusters.js
+      - name: Target list parsing
+        run: |
+          node --input-type=module - <<'JS'
+          import assert from 'node:assert';
+          import { parseWslList } from './lib/targets.js';
+          const rows = parseWslList('  NAME  STATE  VERSION\n* Ubuntu-22.04  Running  2\nDebian  Stopped  1\n');
+          assert.equal(rows.length, 2);
+          assert.equal(rows[0].name, 'Ubuntu-22.04');
+          assert.equal(rows[0].default, true);
+          assert.equal(rows[0].state, 'Running');
+          assert.equal(rows[1].version, 1);
+          console.log('wsl list parsed');
+          JS
       - name: package.json is valid
         run: node -e "JSON.parse(require('node:fs').readFileSync('package.json','utf8'))"
       - name: Python helper syntax

@@ -1,0 +1,10 @@
+# The plugin copies the POSIX helpers byte-for-byte into WSL / Git Bash, and a
+# CRLF shebang makes bash answer `env: 'bash\r': No such file or directory`
+# (exit 127). Keep them LF in the working tree even with core.autocrlf=true.
+* text=auto
+resources/pku text eol=lf
+resources/login.py text eol=lf
+resources/*.cjs text eol=lf
+
+# Windows shims are generated with CRLF on purpose, but never committed.
+*.cmd text eol=crlf
