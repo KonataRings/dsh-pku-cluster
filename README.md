@@ -409,6 +409,7 @@ ssh -O exit pku 2>/dev/null  # 可选：先断开复用连接（如果还在）
 
 | 环境 | 状态 |
 |---|---|
+| DSH 0.2.1-rc.5 + Windows 11 + WSL2（archlinux） | ✅ 已验证（侧边栏 list 槽 `key`、页面与 `/api/state`） |
 | Windows 11 + WSL2（Ubuntu 20.04） | ✅ 已验证（中继路径） |
 | Windows 11 无 WSL 发行版 | ❌ 无可用目标；面板提示先安装 |
 | Windows 11 + WSL2（其他发行版） | ⚠️ 预期可用，未实测（取决于 `ip route` 输出） |
