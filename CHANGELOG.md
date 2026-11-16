@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.2.1 — 2026-11-16
+
+**Fixes**
+
+- A wrong one-time code hung for the full 90 s driver deadline and then reported the misleading stage
+  `post`. A rejected credential makes ssh prompt again, so the driver now treats a repeated prompt (or
+  `Permission denied`) as the failure signal: it kills the child and returns in ~150 ms with `stage: otp`
+  or `stage: password`. ssh also runs with `NumberOfPasswordPrompts=1`, and every exit path reaps the
+  child, so a mistyped code no longer leaves a stale ssh process holding a pty.
+- The page now distinguishes "already connected" from "credentials accepted": `already: true` shows an
+  informational line and points at Disconnect, instead of implying the password and code were verified.
+- The sidebar entry is registered with `id` and falls back to `key`, and a rejected registration can no
+  longer escape `apply()` — that exception used to blank the whole sidebar.
+
+**Compatibility**
+
+- Verified against DSH 0.2.2-rc.3: the host routes are unchanged and the footer seat still takes `id`.
+
+
 ## 0.2.0 — 2026-11-02
 
 **Multi-cluster sessions**
