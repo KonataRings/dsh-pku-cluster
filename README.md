@@ -399,8 +399,7 @@ ssh -O exit pku 2>/dev/null  # 可选：先断开复用连接（如果还在）
 - **中继随插件进程启停**：DSH 退出或重启会一并关闭中继，从而断开已建立的 master 连接。
   要跨 DSH 重启保持连接，需要把中继改成独立常驻服务（本版本未内置）。
 - **Windows 只能用 WSL 目标**：原生 ssh 无法复用连接，因此插件不提供 Windows 本机目标；
-  没有 WSL 发行版时，页面会直接提示先安装；Git for Windows 的 MSYS ssh 能建控制套接字，但无法把会话交给它
-  （AF_UNIX 不支持传文件描述符）。Linux / macOS 的本机模式直接用系统 ssh，不受影响。
+  没有 WSL 发行版时，页面会直接提示先安装。Linux / macOS 的本机模式直接用系统 ssh，不受影响。
 - **WSL 镜像网络（`networkingMode=mirrored`）**：没有 vEthernet 适配器，中继改为绑 `127.0.0.1`，
   WSL 侧经 localhost 互通访问它。
 - 登录节点不可联网、禁止跑计算；必须 `sbatch` 到计算节点。
@@ -409,6 +408,7 @@ ssh -O exit pku 2>/dev/null  # 可选：先断开复用连接（如果还在）
 
 | 环境 | 状态 |
 |---|---|
+| DSH 0.2.2-rc.3 + Windows 11 + WSL2（archlinux） | ✅ 已验证（侧边栏 list 槽 `id`、页面与 `/api/state`） |
 | Windows 11 + WSL2（Ubuntu 20.04） | ✅ 已验证（中继路径） |
 | Windows 11 无 WSL 发行版 | ❌ 无可用目标；面板提示先安装 |
 | Windows 11 + WSL2（其他发行版） | ⚠️ 预期可用，未实测（取决于 `ip route` 输出） |
