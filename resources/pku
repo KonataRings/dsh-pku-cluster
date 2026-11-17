@@ -12,11 +12,13 @@
 #
 # Reads ~/.pku-cluster/sessions/<key>.json so the plugin (not this script) owns
 # the connection parameters. Works in both modes:
-#   relay  - Windows/WSL: ssh goes through the plugin's loopback relay
+#   relay  - Windows/WSL: ssh goes through the plugin's loopback relay, whose
+#            address is `relayHost` (127.0.0.1 under mirrored networking) and
+#            whose port is allocated per session
 #   direct - Linux/macOS: ssh goes straight to the endpoint
 #
-# Authentication is password + OTP (the cluster offers no key auth); the
-# multiplexed ControlMaster is established once by the plugin page.
+# Every command reuses the ControlMaster the plugin opened; ssh runs with
+# BatchMode so a dead master fails immediately instead of waiting for a prompt.
 set -uo pipefail
 
 CONF_DIR="${PKU_CLUSTER_DIR:-$HOME/.pku-cluster}"
@@ -71,20 +73,21 @@ import json, shlex, sys
 c = json.load(open(sys.argv[1]))
 fields = {
     "KEY": c.get("key", ""),
-    "HOST": c.get("host", c.get("loginHost", "")),
-    "PORT": c.get("port", c.get("loginPort", 22)),
+    # Older files only carry loginHost; newer ones carry the resolved host.
+    "HOST": c.get("host") or c.get("loginHost") or "",
+    "PORT": c.get("port") or c.get("loginPort") or 22,
     "USER": c.get("user", ""),
     "MODE": c.get("mode", "direct"),
-    "RELAYPORT": c.get("relayPort", 2222),
+    "RELAYHOST": c.get("relayHost", ""),
+    "RELAYPORT": c.get("relayPort", 0),
     "CONTROLPATH": c.get("controlPath", ""),
-    "SESSIONHOST": c.get("host", ""),
 }
 for name, value in fields.items():
     print("%s=%s" % (name, shlex.quote(str(value))))
 PY
 )"
 else
-  KEY="?"; HOST=""; PORT=22; USER=""; MODE="direct"; RELAYPORT=2222; CONTROLPATH=""
+  KEY="?"; HOST=""; PORT=22; USER=""; MODE="direct"; RELAYHOST=""; RELAYPORT=0; CONTROLPATH=""
 fi
 
 # Session selection is only required for commands that talk to the cluster.
@@ -93,9 +96,16 @@ case "${1:-}" in
   *) [ -n "${HOST:-}" ] || die "no session selected: use -c <cluster>[:<endpoint>] or log in from the DSH sidebar" ;;
 esac
 
+# Resolve the address ssh must dial. In relay mode that is the relay the plugin
+# opened for this session — not the WSL default gateway, which is what the old
+# version used and why `-O check` could never find the master.
 if [ "$MODE" = "relay" ]; then
-  HOST=$(ip route | awk '/^default/{print $3; exit}')
-  PORT="${RELAYPORT:-2222}"
+  if [ -n "${RELAYHOST:-}" ]; then
+    HOST="$RELAYHOST"
+  else
+    HOST=$(ip route | awk '/^default/{print $3; exit}')
+  fi
+  [ -n "${RELAYPORT:-}" ] && [ "$RELAYPORT" != "0" ] && PORT="$RELAYPORT"
 fi
 [ -n "${HOST:-}" ] || [ "${1:-}" = "sessions" ] || die "no target host for session '$KEY'"
 
@@ -108,15 +118,33 @@ if [ -z "${CONTROLPATH:-}" ]; then
 fi
 CP="$CONTROLPATH"
 
-H="${PKU_HOST:-${SESSIONHOST:-$HOST}}"
+# ssh expands these tokens from the destination/options of the invocation, so
+# naming the socket ourselves must use exactly the fields passed below.
+socket_path() {
+  local user="${USER:-$(id -un)}"
+  printf '%s' "$CP" | sed "s/%r/$user/; s/%h/$HOST/; s/%p/$PORT/"
+}
+
+H="${PKU_HOST:-$HOST}"
 H_OPTS=( -o "HostName=$HOST" -o "Port=$PORT" )
 [ -n "${USER:-}" ] && H_OPTS+=( -o "User=$USER" )
 H_OPTS+=( -o "ControlMaster=auto" -o "ControlPath=$CP" -o "ControlPersist=8h" \
-          -o ServerAliveInterval=30 -o ServerAliveCountMax=6 -o TCPKeepAlive=yes )
+          -o ServerAliveInterval=30 -o ServerAliveCountMax=6 -o TCPKeepAlive=yes \
+          -o BatchMode=yes -o ConnectTimeout=20 -o PasswordAuthentication=no )
 
 check() { ssh "${H_OPTS[@]}" -O check "$H" 2>/dev/null; }
+
+# A master that died leaves its socket behind, and ssh will sit on it until it
+# times out. Drop the file when nothing answers on it, then say what happened.
 require_master() {
-  check >/dev/null 2>&1 || die "session '$KEY' is not connected; log in from the DSH sidebar ('Connect cluster') first"
+  if check >/dev/null 2>&1; then return 0; fi
+  local sock
+  sock=$(socket_path)
+  if [ -S "$sock" ]; then
+    rm -f "$sock" 2>/dev/null && \
+      die "session '$KEY' is not connected (removed a stale socket at $sock); log in from the DSH sidebar ('Connect cluster') first"
+  fi
+  die "session '$KEY' is not connected (no socket at $sock); log in from the DSH sidebar ('Connect cluster') first"
 }
 
 case "${1:-}" in
@@ -133,7 +161,12 @@ case "${1:-}" in
   jobs)    require_master; ssh "${H_OPTS[@]}" "$H" 'squeue -u "$USER" 2>/dev/null || cqueue' ;;
   log)     require_master; shift; [ $# -ge 1 ] || die "usage: pku log <file> [lines]"; ssh "${H_OPTS[@]}" "$H" "tail -n ${2:-60} $1" ;;
   shell)   require_master; exec ssh "${H_OPTS[@]}" "$H" ;;
-  down)    ssh "${H_OPTS[@]}" -O exit "$H" 2>/dev/null && echo "disconnected $KEY" || echo "nothing to disconnect" ;;
+  down)    if ssh "${H_OPTS[@]}" -O exit "$H" 2>/dev/null; then
+             echo "disconnected $KEY"
+           else
+             sock=$(socket_path)
+             if [ -S "$sock" ]; then rm -f "$sock" && echo "removed a stale socket for $KEY ($sock)"; else echo "nothing to disconnect"; fi
+           fi ;;
   sessions) [ -d "$SESSIONS" ] || die "no sessions yet"
            python3 - "$SESSIONS" <<'PY'
 import glob, json, os, sys
@@ -143,7 +176,8 @@ for path in sorted(glob.glob(os.path.join(sys.argv[1], "*.json"))):
     except Exception:
         continue
     print("%-12s %-30s user=%s mode=%s" % (
-        c.get("key", "?"), c.get("host", "?"), c.get("user", ""), c.get("mode", "")))
+        c.get("key", "?"), c.get("host") or c.get("loginHost") or "?",
+        c.get("user", ""), c.get("mode", "")))
 PY
            ;;
   *) cat <<'EOF'

@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.2.2 — 2026-11-17
+
+**Fixes**
+
+- `pku` ignored the session's `relayHost` and dialled the WSL default gateway instead, so `-O check`
+  expanded `%h` to that gateway and never found the master the plugin created
+  (`…@198.18.0.2-1122` versus `…@127.0.0.1-1122`). Every command reported "not connected" for a live
+  session. It now resolves the target exactly like `login.py`: `relayHost` when set (the gateway is only
+  a fallback), plus the session's `relayPort`.
+- `login.py` rewrote the session file from `DEFAULTS` on save and dropped the fields the plugin owns
+  (`host`, `cluster`, `endpoint`, `label`). A session that logged in once lost `host`, after which the
+  derived ControlPath no longer matched. `save_config` merges instead, `host` is part of `DEFAULTS`, and
+  older files get `host` backfilled from `loginHost`.
+- `pku` runs ssh with `BatchMode=yes`, `ConnectTimeout=20` and no password authentication, so a dead
+  master fails immediately instead of waiting for a prompt. A stale socket is removed and the checked
+  path is printed; `pku down` cleans one up too.
+
+**Verification**
+
+- Live `wmjx2` session: `pku -c wmjx2:login status` prints the login node (previously "not connected").
+- Fabricated stale socket: `pku status` fails in 43 ms, removes the socket and names the path.
+
+
 ## 0.2.1 — 2026-11-16
 
 **Fixes**

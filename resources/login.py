@@ -53,6 +53,8 @@ DEFAULTS = {
     "relayPort": 2222,
     "controlPath": "",
     "user": "",
+    # The endpoint host as the plugin resolved it; `pku` reads this field.
+    "host": "",
     # Epoch ms of the successful login. load_config only copies the fields
     # listed here, so anything remaining_ms needs must be declared in DEFAULTS.
     "connectedAt": 0,
@@ -98,6 +100,8 @@ def load_config(key: str) -> dict:
                 conf["loginHost"] = raw["host"]
             if raw.get("port") and not raw.get("loginPort"):
                 conf["loginPort"] = raw["port"]
+            if not conf.get("host") and conf.get("loginHost"):
+                conf["host"] = conf["loginHost"]
     except (OSError, ValueError):
         pass
     conf["key"] = str(conf.get("key") or "") or key
@@ -107,12 +111,29 @@ def load_config(key: str) -> dict:
 
 
 def save_config(conf: dict) -> None:
+    """Merge into the session file instead of rewriting it from DEFAULTS.
+
+    The plugin owns fields this driver does not know about (cluster, endpoint,
+    label). Writing DEFAULTS alone used to drop them — that is how a session
+    lost its `host` and started looking for a control socket under a different
+    name than the one the plugin created.
+    """
     key = str(conf.get("key") or "")
     if not key:
         return
     SESSIONS_DIR.mkdir(parents=True, exist_ok=True)
     path = session_path(key)
-    path.write_text(json.dumps(conf, indent=2, ensure_ascii=False) + "\n")
+    merged: dict = {}
+    try:
+        existing = json.loads(path.read_text())
+        if isinstance(existing, dict):
+            merged = existing
+    except (OSError, ValueError):
+        merged = {}
+    merged.update(conf)
+    if not merged.get("host") and merged.get("loginHost"):
+        merged["host"] = merged["loginHost"]
+    path.write_text(json.dumps(merged, indent=2, ensure_ascii=False) + "\n")
     try:
         path.chmod(0o600)
     except OSError:
