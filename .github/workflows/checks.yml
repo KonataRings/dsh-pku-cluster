@@ -46,6 +46,8 @@ jobs:
         run: bash -n resources/pku
       - name: Login driver prompts and session files
         run: python3 tests/test_login_prompts.py
+      - name: Sidebar entry registration
+        run: node tests/test_client_slots.mjs
       - name: pku target resolution and stale sockets
         run: bash tests/test_pku.sh
       - name: YAML patch file parses

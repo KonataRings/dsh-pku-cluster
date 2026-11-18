@@ -25,7 +25,9 @@
   and code, denial, silent failure, connection refused, hung child) and checks that `save_config` keeps the
   plugin-owned fields and backfills `host`.
 - `tests/test_pku.sh` checks the socket path `pku` derives for relay, direct and legacy session files, plus
-  the stale-socket cleanup. Both run in CI.
+  the stale-socket cleanup.
+- `tests/test_client_slots.mjs` registers the sidebar entry against the `id` build, a `key`-only build and
+  one that rejects both, so a slot-shape change cannot blank the sidebar again. All three run in CI.
 
 ## 0.2.2 — 2026-11-17
 
