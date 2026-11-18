@@ -1,5 +1,32 @@
 # Changelog
 
+## 0.2.3 — 2026-11-18
+
+**Fixes**
+
+- The relay address no longer disappears from the session file. Every rewrite (startup and execution-target
+  switch) wrote `relayHost: ""`, so `pku` and the driver fell back to the WSL default gateway while the
+  master was still alive; under `networkingMode=mirrored` that made a live session report "not connected"
+  again after a target switch. The session view now carries the address of the relay that is actually
+  listening, and never a stale one.
+- `pku` defaults a missing or zero `relayPort` to 2222, the same fallback `login.py` applies, so the two
+  cannot dial different ports for one session. It also prefers `loginHost` over `host` in direct mode,
+  which is the field the driver dials when a file carries both.
+- A hung ssh is reported as `timed out waiting for ssh to finish` instead of "no password prompt seen": the
+  deadline check now runs before the prompt diagnostics, and the grace window after it is 1 s, not 5 s.
+- Error details no longer quote the pty buffer blindly. Prompt lines and echoed answers are skipped, so a
+  failed login cannot put the password or the one-time code on the page.
+- Session files are read and written as UTF-8. A Chinese `label` made a locale-dependent decode fail, and
+  that failure was swallowed as "no session file" — which dropped the very fields the merge exists to keep.
+
+**Verification**
+
+- `tests/test_login_prompts.py` drives the prompt state machine against a fake `ssh` (re-prompted password
+  and code, denial, silent failure, connection refused, hung child) and checks that `save_config` keeps the
+  plugin-owned fields and backfills `host`.
+- `tests/test_pku.sh` checks the socket path `pku` derives for relay, direct and legacy session files, plus
+  the stale-socket cleanup. Both run in CI.
+
 ## 0.2.2 — 2026-11-17
 
 **Fixes**
@@ -22,7 +49,6 @@
 - Live `wmjx2` session: `pku -c wmjx2:login status` prints the login node (previously "not connected").
 - Fabricated stale socket: `pku status` fails in 43 ms, removes the socket and names the path.
 
-
 ## 0.2.1 — 2026-11-16
 
 **Fixes**
@@ -32,6 +58,7 @@
   `Permission denied`) as the failure signal: it kills the child and returns in ~150 ms with `stage: otp`
   or `stage: password`. ssh also runs with `NumberOfPasswordPrompts=1`, and every exit path reaps the
   child, so a mistyped code no longer leaves a stale ssh process holding a pty.
+- The pty deadline dropped from 90 s to 45 s, and a run that reaches it is reaped instead of left behind.
 - The page now distinguishes "already connected" from "credentials accepted": `already: true` shows an
   informational line and points at Disconnect, instead of implying the password and code were verified.
 - The sidebar entry is registered with `id` and falls back to `key`, and a rejected registration can no
