@@ -5,6 +5,7 @@
 resources/pku text eol=lf
 resources/login.py text eol=lf
 resources/*.cjs text eol=lf
+tests/*.sh text eol=lf
 
 # Windows shims are generated with CRLF on purpose, but never committed.
 *.cmd text eol=crlf
