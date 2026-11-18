@@ -44,6 +44,10 @@ jobs:
           PY
       - name: Shell helper syntax
         run: bash -n resources/pku
+      - name: Login driver prompts and session files
+        run: python3 tests/test_login_prompts.py
+      - name: pku target resolution and stale sockets
+        run: bash tests/test_pku.sh
       - name: YAML patch file parses
         run: |
           python3 - <<'PY'
