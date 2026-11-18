@@ -368,6 +368,7 @@ ssh -O exit pku 2>/dev/null  # 可选：先断开复用连接（如果还在）
 | 登录在 `relay` 阶段失败 | VPN 没连 / 中继没起来 | 连 VPN；重启 DSH；面板 Diagnose 看 endpoint 项 |
 | 登录在 `password` / `otp` 阶段失败 | 密码错、OTP 过期（30 秒） | 换新验证码重试；确认手机时间准确 |
 | 登录在 `connect` 阶段失败 | `loginHost` 不对、VPN 未连、端口被过滤 | 核对主机名；`ping` 通但 22 超时=访问控制，需 VPN |
+| `pku` 报未连接，但面板显示已连接 | 旧版 `pku` 用默认网关而不是 `relayHost` 去 `-O check`，或残留了陈旧 socket | 升级到 0.2.3：按 `relayHost` 解析目标、`relayPort` 缺省回退 2222，并自动清理陈旧 socket |
 | 登录报 `no password prompt seen: …` | ssh 没在 pty 上打印提示（0.2 之前缺控制终端），或 ssh 自己先失败 | 0.2 起用 `pty.fork()` 分配控制终端；冒号后面是 ssh 的原话，按它排查 |
 | 登录成功但命令超时 | VPN 掉线、中继被回收 | `pku status`；重连 VPN 后重新登录 |
 | Diagnose 有红项 | 见每项的 fix 提示 | 按提示安装/修复 |
@@ -409,6 +410,7 @@ ssh -O exit pku 2>/dev/null  # 可选：先断开复用连接（如果还在）
 
 | 环境 | 状态 |
 |---|---|
+| DSH 0.2.2-rc.3 + Windows 11 + WSL2（archlinux） | ✅ 已验证（侧边栏 list 槽 `id`、页面与 `/api/state`） |
 | Windows 11 + WSL2（Ubuntu 20.04） | ✅ 已验证（中继路径） |
 | Windows 11 无 WSL 发行版 | ❌ 无可用目标；面板提示先安装 |
 | Windows 11 + WSL2（其他发行版） | ⚠️ 预期可用，未实测（取决于 `ip route` 输出） |

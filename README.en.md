@@ -395,6 +395,7 @@ When reporting a bug, include: platform, DSH version, the Diagnose output and th
 
 | Environment | Status |
 |---|---|
+| DSH 0.2.2-rc.3 + Windows 11 + WSL2 (archlinux) | ✅ tested (sidebar list slot `id`, page and `/api/state`) |
 | Windows 11 + WSL2 (Ubuntu 20.04) | ✅ tested (relay path) |
 | Windows 11 + WSL2 (other distros) | ⚠️ expected to work, untested |
 | Linux native | ⚠️ direct path implemented, untested |

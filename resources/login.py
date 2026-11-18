@@ -53,6 +53,8 @@ DEFAULTS = {
     "relayPort": 2222,
     "controlPath": "",
     "user": "",
+    # The endpoint host as the plugin resolved it; `pku` reads this field.
+    "host": "",
     # Epoch ms of the successful login. load_config only copies the fields
     # listed here, so anything remaining_ms needs must be declared in DEFAULTS.
     "connectedAt": 0,
@@ -60,6 +62,9 @@ DEFAULTS = {
 
 PASSWORD_PROMPT = re.compile(r"(?i)password\s*:?\s*$")
 OTP_PROMPT = re.compile(r"(?i)verification\s+code\s*:?\s*$")
+# A whole line that is only a prompt (plus whatever a tty echoed behind it).
+# Used when turning the pty buffer into an error message.
+PROMPT_LINE = re.compile(r"(?i)^\s*(password|verification\s+code)\s*:?\s*")
 DENIED = re.compile(r"(?i)permission\s+denied|authentication\s+failed")
 
 CONTROL_PERSIST = "8h"
@@ -89,7 +94,7 @@ def load_config(key: str) -> dict:
     conf["key"] = key
     path = session_path(key) if key else LEGACY_CONF
     try:
-        raw = json.loads(path.read_text())
+        raw = json.loads(path.read_text(encoding="utf-8"))
         if isinstance(raw, dict):
             for field in DEFAULTS:
                 if field in raw:
@@ -98,6 +103,8 @@ def load_config(key: str) -> dict:
                 conf["loginHost"] = raw["host"]
             if raw.get("port") and not raw.get("loginPort"):
                 conf["loginPort"] = raw["port"]
+            if not conf.get("host") and conf.get("loginHost"):
+                conf["host"] = conf["loginHost"]
     except (OSError, ValueError):
         pass
     conf["key"] = str(conf.get("key") or "") or key
@@ -107,12 +114,29 @@ def load_config(key: str) -> dict:
 
 
 def save_config(conf: dict) -> None:
+    """Merge into the session file instead of rewriting it from DEFAULTS.
+
+    The plugin owns fields this driver does not know about (cluster, endpoint,
+    label). Writing DEFAULTS alone used to drop them — that is how a session
+    lost its `host` and started looking for a control socket under a different
+    name than the one the plugin created.
+    """
     key = str(conf.get("key") or "")
     if not key:
         return
     SESSIONS_DIR.mkdir(parents=True, exist_ok=True)
     path = session_path(key)
-    path.write_text(json.dumps(conf, indent=2, ensure_ascii=False) + "\n")
+    merged: dict = {}
+    try:
+        existing = json.loads(path.read_text(encoding="utf-8"))
+        if isinstance(existing, dict):
+            merged = existing
+    except (OSError, ValueError):
+        merged = {}
+    merged.update(conf)
+    if not merged.get("host") and merged.get("loginHost"):
+        merged["host"] = merged["loginHost"]
+    path.write_text(json.dumps(merged, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     try:
         path.chmod(0o600)
     except OSError:
@@ -287,13 +311,35 @@ def logout(conf: dict) -> dict:
     return {"ok": True, "master": master_alive(conf)}
 
 
-def _answer_prompts(cmd: str, password: str, otp: str, timeout: float = 90.0) -> tuple[bool, str, str]:
+def _last_message(buf: str, secrets: tuple[str, ...] = ()) -> str:
+    """Last line of the pty buffer that is not a prompt or an echoed answer.
+
+    ssh prints its reason after the prompt, so the tail is usually the useful
+    diagnostic. Prompt lines must not become an error string, and neither must
+    an answer that a tty echoed back — the caller passes them as `secrets`.
+    """
+    for line in reversed(buf.splitlines()):
+        text = line.strip()
+        if not text or PROMPT_LINE.match(text):
+            continue
+        if secrets and text in secrets:
+            continue
+        return text[:200]
+    return ""
+
+
+def _answer_prompts(cmd: str, password: str, otp: str, timeout: float = 45.0) -> tuple[bool, str, str]:
     """Run cmd under a pty and answer password / OTP prompts.
 
     pty.fork() rather than openpty() + Popen() matters: it makes the pty the
     child's controlling terminal, and OpenSSH only prints its password prompt
     when it can open /dev/tty. With a bare pty that is not a controlling
-    terminal, ssh blocks silently and the prompt never arrives.
+    terminal ssh blocks silently and no prompt ever arrives.
+
+    A refused credential makes ssh ask again. Seeing a prompt we have already
+    answered is therefore the failure signal: stop, kill the child and report it.
+    Waiting instead would hold the pty (and the ssh process) until the deadline,
+    which is what piled up stale processes when a code was mistyped.
 
     Returns (ok, stage, detail). Never logs the answers.
     """
@@ -308,10 +354,11 @@ def _answer_prompts(cmd: str, password: str, otp: str, timeout: float = 90.0) ->
     stage = "connect"
     sent_password = sent_otp = False
     reaped = False
+    status = None
     deadline = time.time() + timeout
     try:
         while time.time() < deadline:
-            ready, _, _ = select.select([master], [], [], 0.4)
+            ready, _, _ = select.select([master], [], [], 0.2)
             if ready:
                 try:
                     chunk = os.read(master, 4096)
@@ -323,53 +370,73 @@ def _answer_prompts(cmd: str, password: str, otp: str, timeout: float = 90.0) ->
                 tail = buf.rstrip()[-160:]
                 if DENIED.search(tail):
                     return False, stage, "authentication rejected"
-                if not sent_password and PASSWORD_PROMPT.search(tail):
+                if PASSWORD_PROMPT.search(tail):
+                    if sent_password:
+                        # Already answered once: the server refused it and ssh
+                        # is prompting again.
+                        return False, "password", "authentication rejected (password re-prompted)"
                     os.write(master, (password + "\n").encode())
                     sent_password = True
                     stage = "password"
                     buf = ""
-                elif sent_password and not sent_otp and OTP_PROMPT.search(tail):
+                elif OTP_PROMPT.search(tail):
+                    if sent_otp:
+                        return False, "otp", "authentication rejected (code re-prompted)"
                     os.write(master, (otp + "\n").encode())
                     sent_otp = True
                     stage = "otp"
                     buf = ""
-            done, _ = os.waitpid(pid, os.WNOHANG)
+            done, wstatus = os.waitpid(pid, os.WNOHANG)
             if done:
                 reaped = True
-                # drain whatever is left, then stop
-                while True:
-                    ready, _, _ = select.select([master], [], [], 0.1)
-                    if not ready:
-                        break
-                    try:
-                        chunk = os.read(master, 4096)
-                    except OSError:
-                        break
-                    if not chunk:
-                        break
-                    buf = (buf + chunk.decode("utf-8", "ignore"))[-4000:]
+                status = wstatus
                 break
+
         if not reaped:
-            done, _ = os.waitpid(pid, os.WNOHANG)
-            if not done:
-                try:
-                    os.kill(pid, 9)
-                    os.waitpid(pid, 0)
-                except OSError:
-                    pass
+            # The pty may hit EOF (or the server may close) just before the
+            # child is signalled; give it a moment to be collected.
+            while time.time() < deadline + 1:
+                done, wstatus = os.waitpid(pid, os.WNOHANG)
+                if done:
+                    reaped = True
+                    status = wstatus
+                    break
+                time.sleep(0.05)
+
+        if not reaped:
+            # Report the deadline as a deadline. "No password prompt seen" reads
+            # like a configuration problem, while a child that is still running
+            # may simply be stuck.
+            return False, stage, "timed out waiting for ssh to finish"
         if not sent_password:
-            # Surface what ssh said: a stale ~/.ssh/config entry or an
-            # unreachable relay otherwise looks exactly like a bad password.
-            detail = buf.strip().splitlines()[-1].strip() if buf.strip() else ""
+            detail = _last_message(buf, (password, otp))
             return False, "connect", "no password prompt seen" + (f": {detail}" if detail else "")
         if not sent_otp:
             return False, "password", "no verification-code prompt seen"
+
+        try:
+            code = os.waitstatus_to_exitcode(status)
+        except (ValueError, AttributeError):
+            code = 0
+        if code != 0:
+            detail = _last_message(buf, (password, otp))
+            return False, stage, "authentication rejected" + (f": {detail}" if detail else "")
         return True, "done", ""
     finally:
+        if not reaped:
+            try:
+                os.kill(pid, 9)
+            except OSError:
+                pass
+            try:
+                os.waitpid(pid, 0)
+            except OSError:
+                pass
         try:
             os.close(master)
         except OSError:
             pass
+
 
 def login(conf: dict, password: str, otp: str) -> dict:
     user = str(conf.get("user") or "").strip()
@@ -390,7 +457,7 @@ def login(conf: dict, password: str, otp: str) -> dict:
 
     ctrl = " ".join(control_opts(conf))
     cmd = ("exec ssh -M -N -f -o StrictHostKeyChecking=accept-new "
-           f"-o ConnectTimeout=15 -o HostName={host} -o Port={port} -o User={user} "
+           f"-o ConnectTimeout=15 -o NumberOfPasswordPrompts=1 -o HostName={host} -o Port={port} -o User={user} "
            f"{ctrl} {host}")
     ok, stage, detail = _answer_prompts(cmd, password, otp)
     if not ok:
