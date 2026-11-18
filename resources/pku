@@ -70,16 +70,20 @@ PY
   [ -n "$CONF" ] && [ -f "$CONF" ] || die "unknown session '$KEY'"
   eval "$(python3 - "$CONF" <<'PY'
 import json, shlex, sys
-c = json.load(open(sys.argv[1]))
+c = json.load(open(sys.argv[1], encoding="utf-8"))
 fields = {
     "KEY": c.get("key", ""),
-    # Older files only carry loginHost; newer ones carry the resolved host.
-    "HOST": c.get("host") or c.get("loginHost") or "",
+    # loginHost is the host the driver dials in direct mode, `host` is the same
+    # endpoint after the plugin resolved it (older files only carry one of the
+    # two). Prefer the driver's field so both sides name the same target.
+    "HOST": c.get("loginHost") or c.get("host") or "",
     "PORT": c.get("port") or c.get("loginPort") or 22,
     "USER": c.get("user", ""),
     "MODE": c.get("mode", "direct"),
     "RELAYHOST": c.get("relayHost", ""),
-    "RELAYPORT": c.get("relayPort", 0),
+    # login.py treats an absent or zero relayPort as 2222; match it or the two
+    # would dial different ports for the same session.
+    "RELAYPORT": c.get("relayPort") or 2222,
     "CONTROLPATH": c.get("controlPath", ""),
 }
 for name, value in fields.items():
@@ -87,7 +91,7 @@ for name, value in fields.items():
 PY
 )"
 else
-  KEY="?"; HOST=""; PORT=22; USER=""; MODE="direct"; RELAYHOST=""; RELAYPORT=0; CONTROLPATH=""
+  KEY="?"; HOST=""; PORT=22; USER=""; MODE="direct"; RELAYHOST=""; RELAYPORT=2222; CONTROLPATH=""
 fi
 
 # Session selection is only required for commands that talk to the cluster.
@@ -105,7 +109,7 @@ if [ "$MODE" = "relay" ]; then
   else
     HOST=$(ip route | awk '/^default/{print $3; exit}')
   fi
-  [ -n "${RELAYPORT:-}" ] && [ "$RELAYPORT" != "0" ] && PORT="$RELAYPORT"
+  PORT="${RELAYPORT:-2222}"
 fi
 [ -n "${HOST:-}" ] || [ "${1:-}" = "sessions" ] || die "no target host for session '$KEY'"
 
@@ -172,11 +176,11 @@ case "${1:-}" in
 import glob, json, os, sys
 for path in sorted(glob.glob(os.path.join(sys.argv[1], "*.json"))):
     try:
-        c = json.load(open(path))
+        c = json.load(open(path, encoding="utf-8"))
     except Exception:
         continue
     print("%-12s %-30s user=%s mode=%s" % (
-        c.get("key", "?"), c.get("host") or c.get("loginHost") or "?",
+        c.get("key", "?"), c.get("loginHost") or c.get("host") or "?",
         c.get("user", ""), c.get("mode", "")))
 PY
            ;;
