@@ -62,6 +62,9 @@ DEFAULTS = {
 
 PASSWORD_PROMPT = re.compile(r"(?i)password\s*:?\s*$")
 OTP_PROMPT = re.compile(r"(?i)verification\s+code\s*:?\s*$")
+# A whole line that is only a prompt (plus whatever a tty echoed behind it).
+# Used when turning the pty buffer into an error message.
+PROMPT_LINE = re.compile(r"(?i)^\s*(password|verification\s+code)\s*:?\s*")
 DENIED = re.compile(r"(?i)permission\s+denied|authentication\s+failed")
 
 CONTROL_PERSIST = "8h"
@@ -91,7 +94,7 @@ def load_config(key: str) -> dict:
     conf["key"] = key
     path = session_path(key) if key else LEGACY_CONF
     try:
-        raw = json.loads(path.read_text())
+        raw = json.loads(path.read_text(encoding="utf-8"))
         if isinstance(raw, dict):
             for field in DEFAULTS:
                 if field in raw:
@@ -125,7 +128,7 @@ def save_config(conf: dict) -> None:
     path = session_path(key)
     merged: dict = {}
     try:
-        existing = json.loads(path.read_text())
+        existing = json.loads(path.read_text(encoding="utf-8"))
         if isinstance(existing, dict):
             merged = existing
     except (OSError, ValueError):
@@ -133,7 +136,7 @@ def save_config(conf: dict) -> None:
     merged.update(conf)
     if not merged.get("host") and merged.get("loginHost"):
         merged["host"] = merged["loginHost"]
-    path.write_text(json.dumps(merged, indent=2, ensure_ascii=False) + "\n")
+    path.write_text(json.dumps(merged, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     try:
         path.chmod(0o600)
     except OSError:
@@ -308,6 +311,23 @@ def logout(conf: dict) -> dict:
     return {"ok": True, "master": master_alive(conf)}
 
 
+def _last_message(buf: str, secrets: tuple[str, ...] = ()) -> str:
+    """Last line of the pty buffer that is not a prompt or an echoed answer.
+
+    ssh prints its reason after the prompt, so the tail is usually the useful
+    diagnostic. Prompt lines must not become an error string, and neither must
+    an answer that a tty echoed back — the caller passes them as `secrets`.
+    """
+    for line in reversed(buf.splitlines()):
+        text = line.strip()
+        if not text or PROMPT_LINE.match(text):
+            continue
+        if secrets and text in secrets:
+            continue
+        return text[:200]
+    return ""
+
+
 def _answer_prompts(cmd: str, password: str, otp: str, timeout: float = 45.0) -> tuple[bool, str, str]:
     """Run cmd under a pty and answer password / OTP prompts.
 
@@ -375,7 +395,7 @@ def _answer_prompts(cmd: str, password: str, otp: str, timeout: float = 45.0) ->
         if not reaped:
             # The pty may hit EOF (or the server may close) just before the
             # child is signalled; give it a moment to be collected.
-            while time.time() < deadline + 5:
+            while time.time() < deadline + 1:
                 done, wstatus = os.waitpid(pid, os.WNOHANG)
                 if done:
                     reaped = True
@@ -383,20 +403,23 @@ def _answer_prompts(cmd: str, password: str, otp: str, timeout: float = 45.0) ->
                     break
                 time.sleep(0.05)
 
+        if not reaped:
+            # Report the deadline as a deadline. "No password prompt seen" reads
+            # like a configuration problem, while a child that is still running
+            # may simply be stuck.
+            return False, stage, "timed out waiting for ssh to finish"
         if not sent_password:
-            detail = buf.strip().splitlines()[-1].strip() if buf.strip() else ""
+            detail = _last_message(buf, (password, otp))
             return False, "connect", "no password prompt seen" + (f": {detail}" if detail else "")
         if not sent_otp:
             return False, "password", "no verification-code prompt seen"
-        if not reaped:
-            return False, stage, "timed out waiting for ssh to finish"
 
         try:
             code = os.waitstatus_to_exitcode(status)
         except (ValueError, AttributeError):
             code = 0
         if code != 0:
-            detail = buf.strip().splitlines()[-1].strip() if buf.strip() else ""
+            detail = _last_message(buf, (password, otp))
             return False, stage, "authentication rejected" + (f": {detail}" if detail else "")
         return True, "done", ""
     finally:
